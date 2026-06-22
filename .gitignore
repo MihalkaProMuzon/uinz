@@ -1,0 +1,59 @@
+# Виртуальное окружение Python
+backend/venv/
+venv/
+
+# Кэш Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Логи и временные файлы
+*.log
+*.tmp
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Переменные окружения и секреты
+.env
+.env.local
+.env.*.local
+*.secret
+
+# Зависимости фронтенда
+frontend/node_modules/
+node_modules/
+
+# Папки сборки фронтенда (если будут)
+frontend/dist/
+frontend/build/
+dist/
+build/
+
+# Папки сборки/установки Python (если будут)
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE и редакторы
+.vscode/
+.idea/
+*.iml
+.vs/
+*.code-workspace
+
+# Файлы покрытия тестов
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Файлы для пакетных менеджеров (если используются)
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
