@@ -42,25 +42,27 @@ class RoomManager:
 
 manager = RoomManager()
 
+# (Импорты и RoomManager оставь как были)
+
 @app.websocket("/ws/{room_id}/{player_name}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: str):
     room = manager.get_or_create_room(room_id)
     await manager.connect(websocket, room_id)
     
-    # Для простоты пока используем id вебсокета как id игрока
     player_id = str(id(websocket))
-    player = Player(id=player_id, name=player_name)
-    room.players.append(player)
     
-    # ПРАВИЛО ПРОТОТИПА: Как только набирается 2 человека - стартуем игру автоматически
-    if len(room.players) == 2 and room.status == "waiting":
-        room.start_game()
+    # НОВОЕ: Первый вошедший становится хостом
+    is_host = len(room.players) == 0
+    player = Player(id=player_id, name=player_name, is_host=is_host)
+    
+    # НОВОЕ: Если зашел во время игры - насильно становится зрителем
+    if room.status != "waiting":
+        player.wants_to_spectate = True
+        player.is_playing = False
         
-    # Рассылаем всем обновленный статус комнаты
+    room.players.append(player)
     await manager.broadcast(room_id)
     
-
-    # Общение с игроками
     try:
         while True:
             data = await websocket.receive_text()
@@ -68,25 +70,35 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
             action = message.get("action")
             
             try:
-                if action == "play_cards":
-                    card_ids = message.get("card_ids")
-                    declared_color = message.get("declared_color") # Получаем загаданный цвет
-                    room.play_cards(player_id, card_ids, declared_color)
-                elif action == "take_penalty":
-                    room.take_penalty(player_id)
-                elif action == "draw_card":
-                    room.draw_card(player_id)
-                elif action == "pass_turn":
-                    room.pass_turn(player_id)
+                if action == "play_cards": room.play_cards(player_id, message.get("card_ids"), message.get("declared_color"))
+                elif action == "take_penalty": room.take_penalty(player_id)
+                elif action == "draw_card": room.draw_card(player_id)
+                elif action == "pass_turn": room.pass_turn(player_id)
+                elif action == "start_game": room.start_game(player_id)
+                elif action == "reset_lobby": room.reset_to_lobby(player_id)
+                elif action == "toggle_spectator": room.toggle_spectator(player_id)
+                elif action == "transfer_host": room.transfer_host(player_id, message.get("target_id"))
                     
             except ValueError as e:
                 print(f"Ошибка у {player_name}: {e}")
+                # НОВОЕ: Шлем ошибку лично нарушителю, чтобы он знал, что не так!
+                await websocket.send_text(json.dumps({"action": "error", "message": str(e)}))
                 continue 
                 
             await manager.broadcast(room_id)
             
     except WebSocketDisconnect:
         manager.disconnect(websocket, room_id)
-        # Если игрок отвалился, удаляем его из комнаты
-        room.players = [p for p in room.players if p.id != player_id]
+        
+        # НОВОЕ: Ищем игрока перед удалением, чтобы передать хоста
+        leaving_player = next((p for p in room.players if p.id == player_id), None)
+        was_host = leaving_player.is_host if leaving_player else False
+        
+        # Умное удаление
+        room.remove_player(player_id)
+        
+        # Передаем хоста, если он вышел и кто-то остался
+        if was_host and len(room.players) > 0:
+            room.players[0].is_host = True
+            
         await manager.broadcast(room_id)
