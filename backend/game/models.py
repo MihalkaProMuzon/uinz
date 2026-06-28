@@ -3,6 +3,12 @@ import uuid
 from enum import Enum
 from typing import List, Optional
 from pydantic import BaseModel, Field
+import time
+
+
+class ActionType(str, Enum):
+    PLAY = "play"
+    TAKE_CARDS = "take_cards" 
 
 class Color(str, Enum):
     RED = "red"
@@ -25,12 +31,20 @@ class Card(BaseModel):
     card_type: CardType
     value: Optional[int] = None
 
+
+class GameAction(BaseModel):
+    action_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    player_id: str
+    type: ActionType
+    cards: List[Card] = []
+    count: int = 0
+    timestamp: float = Field(default_factory=time.time)
+
+
 class Player(BaseModel):
     id: str
     name: str
     hand: List[Card] = []
-    
-    # НОВЫЕ ПОЛЯ
     is_host: bool = False
     wants_to_spectate: bool = False # Желание быть зрителем (можно менять когда угодно)
     is_playing: bool = False        # Участвует ли физически в текущем раунде
@@ -52,6 +66,7 @@ class GameRoom(BaseModel):
     has_drawn_this_turn: bool = False 
     penalty_cards: int = 0
     declared_color: Optional[Color] = None
+    action_log: List[GameAction] = []
 
     def _generate_deck(self):
         new_deck = []
@@ -116,9 +131,11 @@ class GameRoom(BaseModel):
         self.declared_color = None
         
         # Устанавливаем ход на первого активного игрока
-        self.current_turn_index = -1
+        active_players = [p for p in self.players if p.is_playing]
+        first_player = random.choice(active_players)
+        
+        self.current_turn_index = self.players.index(first_player)
         self.direction = 1
-        self.next_turn()
 
     def reset_to_lobby(self, initiator_id: str):
         """Возврат в лобби после окончания игры"""
@@ -139,6 +156,24 @@ class GameRoom(BaseModel):
         if card.card_type != CardType.NUMBER and card.card_type == top_card.card_type: return True
         if card.card_type == CardType.NUMBER and card.value == top_card.value: return True
         return False
+
+    def add_action(self, player_id: str, act_type: ActionType, cards: Optional[List[Card]] = None, count: int = 0):
+        """Добавляет действие в лог (храним только последние 10)"""
+        if cards is None:
+            cards = []
+        self.action_log.append(GameAction(player_id=player_id, type=act_type, cards=cards, count=count))
+        if len(self.action_log) > 10:
+            self.action_log.pop(0)
+
+    def get_sanitized_state(self, viewer_id: str) -> dict:
+        """ Отдает состояние игры, скрывая карты других игроков"""
+        state = self.model_dump()
+        for p in state['players']:
+            if p['id'] != viewer_id:
+                # Вместо реальных карт отдаем "пустышки" с фейковыми ID, чтобы фронт мог их нарисовать рубашкой вверх
+                p['hand'] = [{'id': f"hidden_{i}", 'color': 'hidden', 'card_type': 'hidden'} for i in range(len(p['hand']))]
+        return state
+
 
     def next_turn(self):
         """Передача хода, ПРОПУСКАЯ наблюдателей"""
@@ -188,6 +223,9 @@ class GameRoom(BaseModel):
             current_player.hand.remove(c)
             self.discard_pile.append(c)
 
+        self.add_action(player_id, ActionType.PLAY, cards_to_play.copy())
+
+
         # СИСТЕМА ПОБЕД
         if len(current_player.hand) == 0:
             current_player.wins += 1 # Даем очко
@@ -211,6 +249,8 @@ class GameRoom(BaseModel):
         for _ in range(self.penalty_cards):
             if self.deck: current_player.hand.append(self.deck.pop())
         
+        self.add_action(player_id, ActionType.TAKE_CARDS, cards=None, count=self.penalty_cards)
+        
         self.penalty_cards = 0
         self.next_turn()
 
@@ -223,6 +263,9 @@ class GameRoom(BaseModel):
         self._ensure_deck(1) # Пробуем перемешать колоду
         if self.deck: current_player.hand.append(self.deck.pop())
         self.has_drawn_this_turn = True
+
+        self.add_action(player_id, ActionType.TAKE_CARDS, cards=None, count=1)
+        
 
     def pass_turn(self, player_id: str):
         current_player = self.players[self.current_turn_index]

@@ -29,16 +29,16 @@ class RoomManager:
             self.connections[room_id].remove(websocket)
 
     async def broadcast(self, room_id: str):
-        """Отправляет актуальное состояние комнаты всем игрокам в ней"""
         room = self.rooms.get(room_id)
-        if not room:
-            return
-        
-        # Pydantic сам превращает всю нашу сложную комнату в JSON-строку!
-        state_json = room.model_dump_json()
+        if not room: return
         
         for connection in self.connections.get(room_id, []):
-            await connection.send_text(state_json)
+            # Вспоминаем ID игрока (мы делали его равным id(websocket))
+            viewer_id = str(id(connection))
+            
+            # Получаем безопасный стейт
+            safe_state = room.get_sanitized_state(viewer_id)
+            await connection.send_text(json.dumps(safe_state))
 
 manager = RoomManager()
 
@@ -47,6 +47,19 @@ manager = RoomManager()
 @app.websocket("/ws/{room_id}/{player_name}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: str):
     room = manager.get_or_create_room(room_id)
+    
+    # НОВОЕ: Проверка на лимит игроков (максимум 6)
+    if len(room.players) >= 6:
+        await websocket.accept()
+        await websocket.close(code=1008, reason="Комната переполнена (максимум 6 игроков)!")
+        return
+
+    # Проверка на занятое имя (без учета регистра)
+    if any(p.name.lower() == player_name.lower() for p in room.players):
+        await websocket.accept()
+        await websocket.close(code=1008, reason="Игрок с таким именем уже в комнате!")
+        return
+        
     await manager.connect(websocket, room_id)
     
     player_id = str(id(websocket))
@@ -57,7 +70,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
     
     # НОВОЕ: Если зашел во время игры - насильно становится зрителем
     if room.status != "waiting":
-        player.wants_to_spectate = True
+        player.wants_to_spectate = False
         player.is_playing = False
         
     room.players.append(player)
