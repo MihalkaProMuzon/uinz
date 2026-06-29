@@ -64,12 +64,8 @@ export function Opponents({ players, meId, currentTurnId, actionLog }: Opponents
             
            <AnimatePresence>
               {incomingCards.map(flyCard => {
-                // --- ТОЧНАЯ МАТЕМАТИКА ОТ БАНКА ДО ОППОНЕНТА ---
-                // Оппонент сидит на `left: 50% - x vw`, `top: y vh`.
-                // Банк сидит на `left: 50% + 220px`, `top: 42vh`.
-                // Высчитываем разницу в пикселях:
-                const startX = 220 + (x / 100 * window.innerWidth);
-                const startY = ((42 - y) / 100 * window.innerHeight);
+                const startX = GAME_CONFIG.BANK_OFFSET_X + (x / 100 * window.innerWidth);
+                const startY = ((GAME_CONFIG.TABLE_CENTER_Y_VH - y) / 100 * window.innerHeight);
 
                 return (
                   <motion.div
@@ -77,7 +73,7 @@ export function Opponents({ players, meId, currentTurnId, actionLog }: Opponents
                     // Старт: координаты Банка, оригинальный размер (1), полная видимость
                     initial={{ opacity: 1, x: startX, y: startY, scale: 1, rotate: 0 }} 
                     // Конец: центр Аватара оппонента (x:0, y:0), ужимается в размер карты (0.25), исчезает
-                    animate={{ opacity: 0, x: 0, y: 0, scale: 0.25, rotate: 0 }} 
+                    animate={{ opacity: 0, x: 0, y: 0, scale: 0.25, rotate: 320 }} 
                     exit={{ opacity: 0 }}
                     transition={{ duration: GAME_CONFIG.ANIMATION_SPEED, delay: flyCard.delay, type: "tween", ease: "easeOut" }}
                     // Дизайн этой летящей карты СТРОГО совпадает с дизайном Банка:
@@ -92,7 +88,7 @@ export function Opponents({ players, meId, currentTurnId, actionLog }: Opponents
             {/* Рубашки карт (мини-веер оппонента с лимитом) */}
             {opp.is_playing && (
               <div className="flex justify-center mt-3" style={{ width: '60px' }}>
-                {/* 👇 НОВОЕ: Ограничиваем массив для визуала 👇 */}
+                {/* Ограничиваем массив для визуала 👇 */}
                 {Array.from({ length: Math.min(opp.hand.length, GAME_CONFIG.MAX_OPPONENT_CARDS) }).map((_, i, arr) => (
                   <div 
                     key={i} 

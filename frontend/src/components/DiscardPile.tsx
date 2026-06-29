@@ -59,8 +59,9 @@ export function DiscardPile({ cards, declaredColor, actionLog, meId, players }: 
       {visibleCards.map((card, index) => {
         const isNewestCard = index === visibleCards.length - 1;
         const rand = getSeededRandom(card.id);
-        const rot = (rand - 0.5) * 40;
-        const offsetX = (rand - 0.5) * 30;
+        const rot = (rand - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_ROT;
+        const offsetX = (rand - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_OFFSET_X;
+        const offsetY = (rand - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_OFFSET_Y;
         const expandedX = (index - visibleCards.length + 1) * 60;
 
         const shouldAnimateSpawn = isNewestCard && isNewPlay;
@@ -79,7 +80,7 @@ export function DiscardPile({ cards, declaredColor, actionLog, meId, players }: 
             } : false}
             animate={{
               x: isExpanded ? expandedX : offsetX,
-              y: 0,
+              y: isExpanded ? 0 : offsetY,
               rotate: isExpanded ? 0 : rot,
               scale: isExpanded ? 0.9 : 1, // Прилетает в норм размер
               opacity: 1,

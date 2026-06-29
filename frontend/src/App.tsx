@@ -1,6 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
-import { DndContext, PointerSensor, useSensor, useSensors, DragOverlay, pointerWithin, type DragEndEvent, type DragOverEvent, type DragStartEvent } from '@dnd-kit/core';
-import { arrayMove } from '@dnd-kit/sortable';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useGameState } from './hooks/useGameState';
 import { Card } from './components/Card';
 import { DiscardPile } from './components/DiscardPile';
@@ -13,7 +11,6 @@ type LocalCard = any & { zone: 'hand' | 'staging' };
 export default function App() {
   const { name, setName, roomId, setRoomId, isConnected, gameState, lastError, connect, sendAction } = useGameState();
   
-  // ЕДИНЫЙ МАССИВ КАРТ
   const [localCards, setLocalCards] = useState<LocalCard[]>([]);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [selectedColor, setSelectedColor] = useState<string>('red');
@@ -24,72 +21,131 @@ export default function App() {
   const penaltyCards = gameState?.penalty_cards || 0;
   const needsToTakePenalty = isMyTurn && penaltyCards > 0;
   
-  const [localHand, setLocalHand] = useState<any[]>([]);
-  const [activeCard, setActiveCard] = useState<any | null>(null);
-  const [isOverStaging, setIsOverStaging] = useState(false); // Для стабильной фиолетовой рамки
-
-  const sensorOptions = useMemo(() => ({ activationConstraint: { distance: 5 } }), []);
-  const sensors = useSensors(useSensor(PointerSensor, sensorOptions));
-  
-
   const [delayedStatus, setDelayedStatus] = useState<string | null>(null);
+
   useEffect(() => {
     if (!gameState) return;
-    
     if (gameState.status === 'finished') {
-      // Если игра закончилась, ждем 2.5 секунды (чтобы карта долетела), затем показываем экран победы
       const timer = setTimeout(() => setDelayedStatus('finished'), GAME_CONFIG.FINISH_DELAY);
       return () => clearTimeout(timer);
     } else {
-      // Иначе (ожидание или игра) обновляем статус мгновенно
       setDelayedStatus(gameState.status);
     }
   }, [gameState?.status]);
   
-
-  // --- СИНХРОНИЗАЦИЯ СОСТОЯНИЯ ---
+  // --- СИНХРОНИЗАЦИЯ СОСТОЯНИЯ И ПАМЯТЬ АНИМАЦИЙ ---
   useEffect(() => {
-    if (!gameState || !me || !me.is_playing) return setLocalCards([]);
-    
-    setLocalCards(prev => {
-      const serverHand = me.hand;
-      // 1. Оставляем только те карты, что есть на сервере, сохраняя их зону
-      const validLocal = prev.filter(p => serverHand.some((s: any) => s.id === p.id));
-      // 2. Новые карты всегда падают в 'hand'
-      const newCards = serverHand.filter((s: any) => !prev.some(p => p.id === s.id)).map((c: any) => ({ ...c, zone: 'hand' }));
-      return [...validLocal, ...newCards];
-    });
-  }, [gameState, name]);
+      const myPlayer = gameState?.players.find((p: any) => p.id === me?.id);
+      if (!myPlayer) return;
 
-  // Возврат карт при ошибке (сбрасываем всем зону на 'hand')
-  useEffect(() => {
-    if (lastError > 0 && me) {
-      setLocalCards(me.hand.map((c: any) => ({ ...c, zone: 'hand' })));
-    }
-  }, [lastError]);
+      const serverHand = myPlayer.hand;
+
+      setLocalCards(prevLocalCards => {
+        // 1. Собираем ID карт, которые сейчас реально есть у нас на сервере
+        const serverCardIds = new Set(serverHand.map((c: any) => c.id));
+
+        // 2. Проходим по нашему локальному массиву (сохраняя пользовательский порядок!)
+        const preservedCards = prevLocalCards
+          .filter(localCard => serverCardIds.has(localCard.id)) // Удаляем сыгранные карты
+          .map(localCard => {
+            // Берем свежие данные с сервера (вдруг цвет у wild-карты поменялся), 
+            // но ЗОНУ оставляем ту, которую выбрал игрок локально!
+            const serverData = serverHand.find((c: any) => c.id === localCard.id);
+            return { ...serverData, zone: localCard.zone };
+          });
+
+        // 3. Ищем совершенно новые карты (которых раньше не было в руках)
+        const preservedCardIds = new Set(preservedCards.map(c => c.id));
+        const newCards = serverHand
+          .filter((c: any) => !preservedCardIds.has(c.id))
+          .map((c: any) => ({ ...c, zone: 'hand' })); // Новые всегда летят в руку
+
+        // Возвращаем объединенный массив
+        return [...preservedCards, ...newCards];
+      });
+    }, [gameState?.players, me?.id]); // Зависимости обновления
+
+
+
 
   // --- ЛОГИКА DRAG & DROP И СОРТИРОВКИ ---
-  const handleDragEnd = (e: any, info: any, cardId: string) => {
-    setActiveCardId(null);
-    if (!isMyTurn || needsToTakePenalty) return;
+  const seenCards = useRef<Set<string>>(new Set());
+  // Этот эффект будет запоминать все карты, которые мы отрендерили
+  
+  
+  // --- ОЧИСТКА ПАМЯТИ И ТРЕКИНГ НОВЫХ КАРТ ---
+  useEffect(() => {
+    // 1. Добавляем все текущие карты в "уже увиденные"
+    localCards.forEach(card => seenCards.current.add(card.id));
 
-    // Y порог для попадания в зону подготовки
+    // 2. УБОРКА: Забываем карты, которых больше нет у нас локально
+    const currentIds = new Set(localCards.map(c => c.id));
+    for (const id of seenCards.current) {
+      if (!currentIds.has(id)) {
+        seenCards.current.delete(id);
+      }
+    }
+  }, [localCards]);
+
+// сортировка в реальном времени ---
+  // --- сортировка и прицеливание между зонами ---
+  const handleDrag = (e: any, info: any, cardId: string) => {
     const dropY = info.point.y;
-    const isStaging = dropY < window.innerHeight + GAME_CONFIG.STAGE_DROP_Y;
-    const targetZone = isStaging ? 'staging' : 'hand';
-
-    // X координата падения относительно центра экрана
     const dropX = info.point.x - (window.innerWidth / 2);
 
-    setLocalCards(prev => {
-      const movingCard = prev.find(c => c.id === cardId);
-      if (!movingCard) return prev;
+    // Определяем, над какой зоной сейчас находится курсор
+    const canStage = isMyTurn && !needsToTakePenalty;
+    const isStagingHover = dropY < window.innerHeight + GAME_CONFIG.STAGE_DROP_Y;
+    const targetZone = (canStage && isStagingHover) ? 'staging' : 'hand';
 
+    setLocalCards(prev => {
+      const originalCard = prev.find(c => c.id === cardId);
+      if (!originalCard) return prev;
+
+      const isZoneChanged = originalCard.zone !== targetZone;
+
+      // 1. ПЛАВНАЯ СОРТИРОВКА ВНУТРИ ОДНОЙ ЗОНЫ (Рука или Зона подготовки)
+      if (!isZoneChanged) {
+        const targetCards = prev.filter(c => c.zone === targetZone);
+        const currentIndex = targetCards.findIndex(c => c.id === cardId);
+        if (currentIndex === -1) return prev;
+
+        const currentLayout = getCardsLayout(targetCards, targetZone);
+        let newIndex = currentIndex;
+        const SWAP_THRESHOLD = 15;
+
+        // Сдвиг влево
+        if (currentIndex > 0) {
+          const leftNeighbor = currentLayout[currentIndex - 1];
+          if (dropX < leftNeighbor.x + SWAP_THRESHOLD) newIndex = currentIndex - 1;
+        }
+
+        // Сдвиг вправо
+        if (currentIndex < targetCards.length - 1) {
+          const rightNeighbor = currentLayout[currentIndex + 1];
+          if (dropX > rightNeighbor.x - SWAP_THRESHOLD) newIndex = currentIndex + 1;
+        }
+
+        if (newIndex !== currentIndex) {
+          const movingCard = targetCards[currentIndex];
+          const targetCardsCopy = [...targetCards];
+          targetCardsCopy.splice(currentIndex, 1);
+          targetCardsCopy.splice(newIndex, 0, movingCard);
+
+          const otherCards = prev.filter(c => c.zone !== targetZone);
+          return targetZone === 'hand' ? [...targetCardsCopy, ...otherCards] : [...otherCards, ...targetCardsCopy];
+        }
+        return prev;
+      }
+
+      // 2. ЕСЛИ ЗОНА ИЗМЕНИЛАСЬ (МЕЖЗОННОЕ ПРИЦЕЛИВАНИЕ)
+      // Карта пересекла границу -> мгновенно перекидываем её в массив новой зоны!
+      const movingCard = { ...originalCard, zone: targetZone };
       const newCards = prev.filter(c => c.id !== cardId);
       const targetCards = newCards.filter(c => c.zone === targetZone);
       const otherCards = newCards.filter(c => c.zone !== targetZone);
 
-      // Получаем макет целевой зоны, чтобы понять, куда (по X) вставить карту
+      // Ищем точное место для вставки (чтобы пустота открылась ровно под мышкой)
       const layout = getCardsLayout(targetCards, targetZone);
       let insertIdx = targetCards.length;
       for (let i = 0; i < layout.length; i++) {
@@ -99,12 +155,16 @@ export default function App() {
         }
       }
 
-      movingCard.zone = targetZone;
       targetCards.splice(insertIdx, 0, movingCard);
-
-      // Возвращаем склеенный массив
       return targetZone === 'hand' ? [...targetCards, ...otherCards] : [...otherCards, ...targetCards];
     });
+  };
+
+  // --- окончание DRAG & DROP ---
+ const handleDragEnd = (e: any, info: any, cardId: string) => {
+    // Вся тяжелая работа уже сделана в handleDrag в реальном времени.
+    // Просто отключаем режим "драга", чтобы Фреймер плавно довёл карту в её слот.
+    setActiveCardId(null);
   };
 
   const stagedCards = localCards.filter(c => c.zone === 'staging');
@@ -124,9 +184,7 @@ export default function App() {
     );
   }
 
-  if (!gameState) {
-    return <div className="min-h-screen bg-neutral-900 flex items-center justify-center"><h2 className="text-2xl text-white font-bold animate-pulse">Синхронизация...</h2></div>;
-  }
+  if (!gameState) return <div className="min-h-screen bg-neutral-900 flex items-center justify-center"><h2 className="text-2xl text-white font-bold animate-pulse">Синхронизация...</h2></div>;
 
   if (delayedStatus === 'waiting' || delayedStatus === 'finished') {
     const isFinished = delayedStatus === 'finished';
@@ -137,6 +195,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-neutral-900 text-white flex flex-col items-center justify-center p-4 sm:p-8 font-sans">
         <div className="w-full max-w-3xl bg-neutral-800 p-6 sm:p-10 rounded-3xl shadow-2xl">
+          {/* ... ЛОББИ БЕЗ ИЗМЕНЕНИЙ ... */}
           {isFinished ? (
             <div className="text-center mb-8 bg-yellow-500/10 p-6 rounded-2xl border-2 border-yellow-500/50">
               <h1 className="text-4xl sm:text-5xl font-black text-yellow-400 mb-3 drop-shadow-[0_0_15px_rgba(250,204,21,0.5)]">🎉 ИГРА ОКОНЧЕНА 🎉</h1>
@@ -195,15 +254,17 @@ export default function App() {
     );
   }
 
-  // --- ВЫЧИСЛЕНИЕ КООРДИНАТ ДЛЯ РЕНДЕРА ---
   const handCards = localCards.filter(c => c.zone === 'hand');
   const handLayout = getCardsLayout(handCards, 'hand');
   const stagingLayout = getCardsLayout(stagedCards, 'staging');
 
- return (
+  // Вычисляем стартовые координаты для анимации Банка (относительно якоря "bottom-0 left-1/2")
+  const bankStartY = -(window.innerHeight * ((100 - GAME_CONFIG.TABLE_CENTER_Y_VH) / 100));
+  const bankStartX = GAME_CONFIG.BANK_OFFSET_X;
+
+  return (
     <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-teal-900 to-black text-white overflow-hidden">
 
-      {/* ... ИНДИКАТОРЫ ХОДА И ОППОНЕНТЫ */}
       <div className="absolute top-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center pointer-events-none transition-all">
         {isMyTurn ? (
           <div className={`px-8 py-3 text-white font-black text-2xl rounded-full border-2 border-white shadow-[0_0_30px_rgba(34,197,94,0.8)] animate-bounce ${needsToTakePenalty ? 'bg-red-600 shadow-[0_0_40px_rgba(220,38,38,0.8)]' : 'bg-green-500'}`}>
@@ -221,38 +282,16 @@ export default function App() {
         )}
       </div>
 
-      <Opponents 
-        players={gameState.players} 
-        meId={me?.id} 
-        currentTurnId={currentPlayer?.id} 
-        actionLog={gameState.action_log}
-      />
+      <Opponents players={gameState.players} meId={me?.id} currentTurnId={currentPlayer?.id} actionLog={gameState.action_log} />
 
-      
-      {/* СБРОС И БАНК */}
-      <div 
-        className="absolute left-1/2 w-full -translate-x-1/2 -translate-y-1/2 pointer-events-none flex justify-center items-center"
-        style={{ top: `${GAME_CONFIG.TABLE_CENTER_Y_VH}vh` }} // 👈 Читаем из конфига
-      >
+      <div className="absolute left-1/2 w-full -translate-x-1/2 -translate-y-1/2 pointer-events-none flex justify-center items-center" style={{ top: `${GAME_CONFIG.TABLE_CENTER_Y_VH}vh` }}>
         <div className="relative pointer-events-auto z-20">
-          <DiscardPile 
-            cards={gameState.discard_pile} 
-            declaredColor={gameState.declared_color} 
-            actionLog={gameState.action_log}
-            meId={me?.id}
-            players={gameState.players}
-          />
+          <DiscardPile cards={gameState.discard_pile} declaredColor={gameState.declared_color} actionLog={gameState.action_log} meId={me?.id} players={gameState.players} />
         </div>
-        
-        {/* Банк */}
         <div 
           onClick={() => isMyTurn && !gameState.has_drawn_this_turn && !needsToTakePenalty && sendAction('draw_card')}
           className={`absolute left-1/2 bg-neutral-800 rounded-xl border-4 border-neutral-700 flex items-center justify-center shadow-2xl transition-all pointer-events-auto ${isMyTurn && !gameState.has_drawn_this_turn && !needsToTakePenalty ? 'cursor-pointer hover:scale-105 hover:-translate-y-2 border-amber-500 shadow-[0_0_25px_rgba(245,158,11,0.4)]' : 'opacity-80'}`}
-          style={{ 
-            width: GAME_CONFIG.CARD_WIDTH,       // 👈 Наследует ширину
-            height: GAME_CONFIG.CARD_HEIGHT,     // 👈 Наследует высоту
-            marginLeft: GAME_CONFIG.BANK_OFFSET_X // 👈 Наследует отступ
-          }}
+          style={{ width: GAME_CONFIG.CARD_WIDTH, height: GAME_CONFIG.CARD_HEIGHT, marginLeft: GAME_CONFIG.BANK_OFFSET_X }}
         >
           <span className="text-neutral-500 font-black rotate-[-45deg] text-xl">UNO</span>
           <div className="absolute -bottom-5 text-xs text-white/70 bg-black/60 px-3 py-1 rounded-full border border-white/10 font-bold whitespace-nowrap">
@@ -261,29 +300,43 @@ export default function App() {
         </div>
       </div>
 
+      {/* КНОПКИ ЗАВЕРШЕНИЯ ХОДА И ШТРАФА 👇 */}
+      {isMyTurn && (
+        <div 
+          className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-4 z-50 pointer-events-auto"
+          style={{ bottom: GAME_CONFIG.STAGE_BOX_BOTTOM + GAME_CONFIG.STAGE_BOX_HEIGHT + 20 }} // Размещаем чуть выше рамки Зоны подготовки
+        >
+          {needsToTakePenalty && (
+            <button 
+              onClick={() => sendAction('take_penalty')} 
+              className="px-10 py-5 bg-red-600 hover:bg-red-500 text-white font-black text-2xl rounded-full shadow-[0_0_50px_rgba(220,38,38,1)] transform hover:scale-110 transition-all border-4 border-white animate-pulse"
+            >
+              😱 ЗАБРАТЬ {penaltyCards} КАРТ(Ы)
+            </button>
+          )}
+          {!needsToTakePenalty && gameState?.has_drawn_this_turn && stagedCards.length === 0 && (
+            <button 
+              onClick={() => sendAction('pass_turn')} 
+              className="px-8 py-3 bg-neutral-700 hover:bg-neutral-600 text-white font-black text-xl rounded-full shadow-[0_0_30px_rgba(0,0,0,0.6)] transform hover:scale-105 transition-all border-2 border-neutral-400"
+            >
+              ⏭ ЗАКОНЧИТЬ ХОД
+            </button>
+          )}
+        </div>
+      )}
 
-       {/* РУКА И ЗОНА ПОДГОТОВКИ */}
       {me.is_playing && (
         <div className="fixed bottom-0 left-1/2 w-0 h-0 pointer-events-none z-40">
           
-          {/* ДЕКОРАТИВНАЯ ЗОНА ПОДГОТОВКИ */}
           {(!needsToTakePenalty && isMyTurn) && (
             <div 
               className="absolute left-1/2 -translate-x-1/2 p-4 rounded-3xl border-4 border-dashed border-white/30 bg-black/20"
-              style={{
-                bottom: GAME_CONFIG.STAGE_BOX_BOTTOM, // 👈 Из конфига
-                width: GAME_CONFIG.STAGE_BOX_WIDTH,   // 👈 Из конфига
-                height: GAME_CONFIG.STAGE_BOX_HEIGHT  // 👈 Из конфига
-              }} 
+              style={{ bottom: GAME_CONFIG.STAGE_BOX_BOTTOM, width: GAME_CONFIG.STAGE_BOX_WIDTH, height: GAME_CONFIG.STAGE_BOX_HEIGHT }} 
             />
           )}
 
-          {/* ПАЛИТРА ЦВЕТОВ */}
           {needsColor && stagedCards.length > 0 && !needsToTakePenalty && isMyTurn && (
-            <div 
-              className="absolute left-1/2 -translate-x-1/2 flex gap-2 p-2 bg-white/80 backdrop-blur rounded-full shadow-lg border pointer-events-auto"
-              style={{ bottom: GAME_CONFIG.PALETTE_BOTTOM }} 
-            >
+            <div className="absolute left-1/2 -translate-x-1/2 flex gap-2 p-2 bg-white/80 backdrop-blur rounded-full shadow-lg border pointer-events-auto" style={{ bottom: GAME_CONFIG.PALETTE_BOTTOM }}>
               {['red', 'green', 'blue', 'yellow'].map(c => (
                 <button
                   key={c}
@@ -295,7 +348,6 @@ export default function App() {
             </div>
           )}
 
-          {/* КНОПКА СЫГРАТЬ */}
           {stagedCards.length > 0 && !needsToTakePenalty && isMyTurn && (
             <button 
               onClick={handlePlayCards}
@@ -306,36 +358,61 @@ export default function App() {
             </button>
           )}
 
-          {/* РЕНДЕР ВСЕХ КАРТ В ЕДИНОМ СЛОЕ */}
           {localCards.map(card => {
             const isHand = card.zone === 'hand';
-            const layout = isHand 
-              ? handLayout.find(l => l.id === card.id)! 
-              : stagingLayout.find(l => l.id === card.id)!;
-            
-            // Базовые высоты: рука на 60px от низа, зона подготовки на 310px от низа
+            const layout = isHand ? handLayout.find(l => l.id === card.id)! : stagingLayout.find(l => l.id === card.id)!;
             const targetY = isHand ? GAME_CONFIG.HAND_Y_POS - layout.y : GAME_CONFIG.STAGE_ZONE_Y;
+            
             const isDragging = activeCardId === card.id;
+            const isNew = !seenCards.current.has(card.id);
+
+            // 🏆 УМНЫЙ ANIMATE: Разделяем логику полета, перетаскивания и покоя
+            let animateProps;
+
+            if (isDragging) {
+              // 1. КОГДА ТАЩИМ: Убираем x и y! 
+              // Теперь мышка управляет картой свободно, без задержек и сопротивления.
+              animateProps = {
+                scale: 1,
+                rotate: 0, // Карта выравнивается (становится прямо), пока мы её несем
+                opacity: 1,
+                zIndex: 100
+              };
+            } else if (isNew) {
+              // 2. КОГДА ТОЛЬКО ВЗЯЛИ ИЗ БАНКА: Летит по Keyframes [оттуда, сюда]
+              animateProps = {
+                x: [bankStartX, layout.x],
+                y: [bankStartY, targetY],
+                scale: [0.5, 1],
+                rotate: [-45, layout.rotate],
+                opacity: [0, 1],
+                zIndex: layout.zIndex + (isHand ? 0 : 50)
+              };
+            } else {
+              // 3. ОБЫЧНОЕ СОСТОЯНИЕ (Покой или Возврат после того как отпустили)
+              // Фреймер сам интерполирует плавный полет из точки, где ты бросил карту, сюда.
+              animateProps = {
+                x: layout.x,
+                y: targetY,
+                scale: 1,
+                rotate: layout.rotate,
+                opacity: 1,
+                zIndex: layout.zIndex + (isHand ? 0 : 50)
+              };
+            }
 
             return (
               <Card
                 key={card.id}
                 card={card}
-                className="pointer-events-auto" // Возвращаем кликабельность картам
-                onDragStart={() => {
-                  if (isMyTurn && !needsToTakePenalty) setActiveCardId(card.id);
-                }}
+                className="pointer-events-auto"
+                
+                onDragStart={() => setActiveCardId(card.id)}
+                onDrag={(e, info) => handleDrag(e, info, card.id)}
                 onDragEnd={(e, info) => handleDragEnd(e, info, card.id)}
-                animate={{
-                  x: layout.x,
-                  y: targetY,
-                  rotate: layout.rotate,
-                  zIndex: isDragging ? 100 : layout.zIndex + (isHand ? 0 : 50) // Зона подготовки всегда выше руки
-                }}
-                whileHover={isHand ? { 
-                  y: targetY - GAME_CONFIG.CARD_HOVER_OFFSET, 
-                  rotate: layout.rotate,  
-                } : {}}
+                
+                animate={animateProps}
+                whileHover={isHand && !isDragging ? { y: targetY - GAME_CONFIG.CARD_HOVER_OFFSET, rotate: layout.rotate } : {}}
                 transition={GAME_CONFIG.TRANSITIONS.UI}
               />
             );
