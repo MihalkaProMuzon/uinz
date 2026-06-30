@@ -54,6 +54,9 @@ export const GAME_CONFIG = {
   DEFAULT_WILD_COLOR: 'red',
   DECK_MAX_THICKNESS: 1,
 
+  CARDS_ACTION_MAX_AGE_MS: 300000, // Если действие позже max age, не проигрывать
+  UNO_ACTION_MAX_AGE_MS: 60000,
+
   ANIMATION_SPEED, 
 
   TRANSITIONS: {

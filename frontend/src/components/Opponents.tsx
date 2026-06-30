@@ -1,6 +1,8 @@
 import { GAME_CONFIG } from '../lib/config';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useEffect, useState, useRef } from 'react';
+import { PlayerEvents } from './PlayerEvents';
+
 
 interface OpponentsProps {
   players: any[];
@@ -19,8 +21,14 @@ export function Opponents({ players, meId, currentTurnId, actionLog }: Opponents
   useEffect(() => {
     if (!actionLog) return;
     
-    // Ищем только те действия, которые мы еще не видели
-    const newActions = actionLog.filter(a => !processedActions.current.has(a.action_id));
+    const now = Date.now();
+    
+    // Ищем только те действия, которые мы еще не видели и которые свежие
+    const newActions = actionLog.filter(a => {
+      const isNew = !processedActions.current.has(a.action_id);
+      const isFresh = a.timestamp ? (now - a.timestamp < GAME_CONFIG.CARDS_ACTION_MAX_AGE_MS) : true;
+      return isNew && isFresh;
+    });
     
     newActions.forEach(action => {
       processedActions.current.add(action.action_id); // Помечаем как обработанное
@@ -39,7 +47,7 @@ export function Opponents({ players, meId, currentTurnId, actionLog }: Opponents
         }, 1500 + (action.count * 150));
       }
     });
-  }, [actionLog]);
+  }, [actionLog, meId]);
 
   if (opponents.length === 0) return null;
 
@@ -58,6 +66,10 @@ export function Opponents({ players, meId, currentTurnId, actionLog }: Opponents
             className="absolute flex flex-col items-center transition-all duration-500"
             style={{ left: `calc(50% - ${x}vw)`, top: `${y}vh`, transform: 'translate(-50%, -50%)' }}
           >
+            {/* === АНИМАЦИИ ВЫКРИКОВ ДЛЯ ПРОТИВНИКА === */}
+            {/* ИСПРАВЛЕНИЕ: opp.id вместо p.id */}
+            <PlayerEvents playerId={opp.id} actionLog={actionLog || []} players={players} />
+
             <div className={`px-5 py-2 rounded-full font-bold text-white shadow-lg border-2 z-20 transition-all ${isHisTurn ? 'bg-green-500 border-white scale-110 shadow-[0_0_20px_rgba(34,197,94,0.6)]' : 'bg-gray-800 border-gray-600 opacity-90'}`}>
               {opp.is_host && '👑 '}{opp.wants_to_spectate && '👁️ '}{opp.name}
             </div>

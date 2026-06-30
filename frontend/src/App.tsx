@@ -3,6 +3,7 @@ import { useGameState } from './hooks/useGameState';
 import { Card } from './components/Card';
 import { DiscardPile } from './components/DiscardPile';
 import { Opponents } from './components/Opponents';
+import { PlayerEvents } from './components/PlayerEvents';
 import { getCardsLayout } from './lib/math';
 import { GAME_CONFIG } from './lib/config';
 
@@ -14,6 +15,16 @@ export default function App() {
   const [localCards, setLocalCards] = useState<LocalCard[]>([]);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [selectedColor, setSelectedColor] = useState<string>('red');
+  
+  // Кулл даун нажатия кнопки "Поймать!" и "УНО!""
+  const [catchCooldown, setCatchCooldown] = useState(false);
+  const [willSayUno, setWillSayUno] = useState(false);
+
+  useEffect(() => {
+    setCatchCooldown(false);
+    setWillSayUno(false); // Сбрасываем намерение каждый новый ход
+  }, [gameState?.turn_id]);
+
 
   const me = gameState?.players.find((p: any) => p.name === name);
   const currentPlayer = gameState?.players[gameState?.current_turn_index];
@@ -21,6 +32,10 @@ export default function App() {
   const penaltyCards = gameState?.penalty_cards || 0;
   const needsToTakePenalty = isMyTurn && penaltyCards > 0;
   
+  const myPlayerInfo = gameState?.players.find((p: any) => p.id === me?.id);
+  const iSaidUno = myPlayerInfo?.said_uno;
+
+
   const [delayedStatus, setDelayedStatus] = useState<string | null>(null);
 
   useEffect(() => {
@@ -167,8 +182,29 @@ export default function App() {
   const needsColor = stagedCards.some(c => c.color === 'black');
 
   const handlePlayCards = () => {
-    sendAction('play_cards', { card_ids: stagedCards.map(c => c.id), declared_color: needsColor ? selectedColor : undefined });
+    // Если игрок заранее подготовил выкрик УНО, отправляем его ПЕРЕД самим ходом
+    if (willSayUno) {
+      sendAction('say_uno');
+    }
+    
+    sendAction('play_cards', { 
+      card_ids: stagedCards.map(c => c.id), 
+      declared_color: needsColor ? selectedColor : undefined 
+    });
   };
+
+  const handlePassTurn = () => {
+    // Если игрок заранее подготовил выкрик УНО, отправляем его ПЕРЕД самим ходом
+    if (willSayUno) {
+      sendAction('say_uno');
+    }
+    
+    sendAction('pass_turn');
+  }
+
+
+
+
 
   if (!isConnected) {
     return (
@@ -180,6 +216,8 @@ export default function App() {
     );
   }
 
+
+  
   if (!gameState) return <div className="min-h-screen bg-neutral-900 flex items-center justify-center"><h2 className="text-2xl text-white font-bold animate-pulse">Синхронизация...</h2></div>;
 
   if (delayedStatus === 'waiting' || delayedStatus === 'finished') {
@@ -258,17 +296,19 @@ export default function App() {
   const bankStartY = -(window.innerHeight * ((100 - GAME_CONFIG.TABLE_CENTER_Y_VH) / 100));
   const bankStartX = GAME_CONFIG.BANK_OFFSET_X;
 
+  const move_dir = gameState.direction == 1 ? '➡' : '⬅';
+
   return (
     <div className="min-h-screen bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-teal-900 to-black text-white overflow-hidden">
 
       <div className="absolute top-8 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center pointer-events-none transition-all">
         {isMyTurn ? (
           <div className={`px-8 py-3 text-white font-black text-2xl rounded-full border-2 border-white shadow-[0_0_30px_rgba(34,197,94,0.8)] animate-bounce ${needsToTakePenalty ? 'bg-red-600 shadow-[0_0_40px_rgba(220,38,38,0.8)]' : 'bg-green-500'}`}>
-            {needsToTakePenalty ? 'Возьми карты!' : '🔥 Твой ход!'}
+            {move_dir} {needsToTakePenalty ? 'Возьми карты!' : 'Твой ход!'} {move_dir}
           </div>
         ) : (
           <div className="px-8 py-3 bg-neutral-900/80 backdrop-blur text-white font-bold text-xl rounded-full shadow-lg border-2 border-neutral-600">
-            ⏳ Ходит: <span className="text-fuchsia-400">{currentPlayer?.name}</span>
+            {move_dir} ⏳ Ходит: <span className="text-fuchsia-400">{currentPlayer?.name}</span> {move_dir}
           </div>
         )}
         {penaltyCards > 0 && (
@@ -312,7 +352,7 @@ export default function App() {
           )}
           {!needsToTakePenalty && gameState?.has_drawn_this_turn && stagedCards.length === 0 && (
             <button 
-              onClick={() => sendAction('pass_turn')} 
+              onClick={handlePassTurn} 
               className="px-8 py-3 bg-neutral-700 hover:bg-neutral-600 text-white font-black text-xl rounded-full shadow-[0_0_30px_rgba(0,0,0,0.6)] transform hover:scale-105 transition-all border-2 border-neutral-400"
             >
               ⏭ ЗАКОНЧИТЬ ХОД
@@ -321,9 +361,59 @@ export default function App() {
         </div>
       )}
 
+      {/* HUD: КНОПКИ УНО (Всегда активны во время игры) */}
+      {me?.is_playing && gameState?.status === 'playing' && (
+        <div className="fixed bottom-10 left-8 flex flex-col gap-4 z-50 pointer-events-auto">
+          
+          {/* Кнопка СКАЗАТЬ УНО */}
+          <button 
+            onClick={() => {
+              if (isMyTurn && !willSayUno) {
+                setWillSayUno(true);
+              }
+            }}
+            disabled={!isMyTurn || willSayUno || iSaidUno}
+            className={`w-28 h-28 rounded-full border-4 font-black text-3xl transition-all duration-300 flex items-center justify-center text-center select-none ${
+              !isMyTurn 
+                ? 'bg-neutral-700 text-neutral-500 border-neutral-600 cursor-not-allowed scale-95'
+                : (willSayUno || iSaidUno) 
+                  ? 'bg-green-500 text-white scale-110 shadow-[0_0_30px_rgba(34,197,94,0.8)] border-white' 
+                  : 'bg-red-600 hover:bg-red-500 text-white hover:scale-105 active:scale-95 shadow-[0_0_20px_rgba(220,38,38,0.6)] border-white'
+            }`}
+            title={!isMyTurn ? "Кричать УНО можно только в свой ход!" : "Нажми, если у тебя останется 1 карта после хода!"}
+          >
+            {(isMyTurn && (willSayUno || iSaidUno)) ? 'Ok!' : 'Uinz!'}
+          </button>
+
+          {/* Кнопка "Поймать" (с защитой от спама) */}
+          <button 
+            onClick={() => {
+              if (!catchCooldown) {
+                sendAction('catch_uno');
+                setCatchCooldown(true);
+              }
+            }}
+            disabled={catchCooldown}
+            className={`px-4 py-3 rounded-xl border-2 font-bold text-sm shadow-lg transition-all select-none ${
+              catchCooldown 
+                ? 'bg-neutral-800/50 border-neutral-700 text-neutral-600 cursor-not-allowed' 
+                : 'bg-neutral-800 hover:bg-neutral-700 border-neutral-500 text-neutral-200 transform hover:-translate-y-1 active:translate-y-0'
+            }`}
+            title="Нажми, чтобы оштрафовать того, кто забыл крикнуть УНО"
+          >
+            {catchCooldown ? '⏳ Ожидание...' : '🚨 Поймать!'}
+          </button>
+          
+        </div>
+      )}
+      
+
       {me.is_playing && (
         <div className="fixed bottom-0 left-1/2 w-0 h-0 pointer-events-none z-40">
           
+          {/* === АНИМАЦИИ ВЫКРИКОВ ДЛЯ СЕБЯ === */}
+          <PlayerEvents playerId={me.id} actionLog={gameState.action_log} players={gameState.players} />
+
           {(!needsToTakePenalty && isMyTurn) && (
             <div 
               className="absolute left-1/2 -translate-x-1/2 p-4 rounded-3xl border-4 border-dashed border-white/30 bg-black/20"

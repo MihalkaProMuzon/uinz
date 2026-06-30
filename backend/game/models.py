@@ -5,7 +5,6 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 import time
 
-
 class ActionType(str, Enum):
     PLAY = "play"
     TAKE_CARDS = "take_cards" 
@@ -49,24 +48,28 @@ class Player(BaseModel):
     wants_to_spectate: bool = False # Желание быть зрителем (можно менять когда угодно)
     is_playing: bool = False        # Участвует ли физически в текущем раунде
     wins: int = 0                   # Счетчик побед
+    said_uno: bool = False
 
 class GameStatus(str, Enum):
     WAITING = "waiting" # Лобби
     PLAYING = "playing" # Игра
     FINISHED = "finished" # Экран победы
 
+
 class GameRoom(BaseModel):
     room_id: str
-    players: List[Player] = []
+    players: List[Player] = Field(default_factory=list)
     status: GameStatus = GameStatus.WAITING
-    deck: List[Card] = []
-    discard_pile: List[Card] = []
+    deck: List[Card] = Field(default_factory=list)
+    discard_pile: List[Card] = Field(default_factory=list)
     current_turn_index: int = 0
+    turn_id: int = 0
+    last_played_player_id: Optional[str] = None
     direction: int = 1
     has_drawn_this_turn: bool = False 
     penalty_cards: int = 0
     declared_color: Optional[Color] = None
-    action_log: List[GameAction] = []
+    action_log: List[GameAction] = Field(default_factory=list)
 
     def _generate_deck(self):
         new_deck = []
@@ -96,6 +99,9 @@ class GameRoom(BaseModel):
         self.deck.extend(self.discard_pile) # Забираем остальной сброс
         self.discard_pile = [top_card] # Возвращаем карту на стол
         random.shuffle(self.deck) # Тасуем!
+
+    def get_player_by_id(self, player_id: str) -> Optional[str]:
+        return next((p for p in self.players if p.id == player_id), None)
 
     def start_game(self, initiator_id: str):
         """Хост запускает игру"""
@@ -177,11 +183,67 @@ class GameRoom(BaseModel):
 
     def next_turn(self):
         """Передача хода, ПРОПУСКАЯ наблюдателей"""
+        self.turn_id += 1
         while True:
             self.current_turn_index = (self.current_turn_index + self.direction) % len(self.players)
-            if self.players[self.current_turn_index].is_playing:
+            iplayer = self.players[self.current_turn_index]
+            iplayer.said_uno = False
+            if iplayer.is_playing:
                 break
+        
         self.has_drawn_this_turn = False
+
+    def catch_uno(self, catcher_id: str):
+        """Попытка поймать игрока, который ПОСЛЕДНИМ совершил действие, если у него 1 карта и он не сказал УНО"""
+        
+        print(f'Попытка поймать {self.last_played_player_id}')
+        # Если нет, ловить некого
+        if not self.last_played_player_id:
+            return
+
+        # Ищем именно того, кто сделал последний ход
+        target_player = next((p for p in self.players if p.id == self.last_played_player_id), None)
+        
+        if not target_player:
+            return
+
+        # Проверяем, виновен ли этот последний игрок
+        if len(target_player.hand) == 1 and not target_player.said_uno:
+            # Штраф!
+            self._ensure_deck(1) # Перемешиваем сброс, если колода пуста!
+            if self.deck:
+                target_player.hand.append(self.deck.pop())
+            
+            target_player.said_uno = False
+            
+            # Записываем в лог для крутых всплывающих анимаций
+            if hasattr(self, 'action_log'):
+                import time
+                import uuid
+                self.action_log.append({
+                    "action_id": str(uuid.uuid4()),
+                    "type": "catch_uno",
+                    "player_id": catcher_id,      # Тот, кто нажал (Ловец)
+                    "caught_id": target_player.id, # Кого оштрафовали (Жертва)
+                    "timestamp": int(time.time() * 1000) # Защита от старых экшенов
+                })
+                
+
+    def say_uno(self, player_id: str):
+        """Игрок кричит УНО, защищая себя"""
+        player = next((p for p in self.players if p.id == player_id), None)
+        if player:
+            player.said_uno = True
+            
+            # Логируем, чтобы показать зеленую надпись!
+            if hasattr(self, 'action_log'):
+                import uuid
+                self.action_log.append({
+                    "action_id": str(uuid.uuid4()),
+                    "type": "say_uno",
+                    "player_id": player_id
+                })
+
 
     def play_cards(self, player_id: str, card_ids: List[str], declared_color: Optional[Color] = None):
         current_player = self.players[self.current_turn_index]
@@ -239,6 +301,7 @@ class GameRoom(BaseModel):
             
         if last_card.card_type == CardType.SKIP: self.next_turn()
         self.next_turn()
+        self.last_played_player_id = current_player.id
 
     def take_penalty(self, player_id: str):
         current_player = self.players[self.current_turn_index]
@@ -272,7 +335,8 @@ class GameRoom(BaseModel):
         if current_player.id != player_id: raise ValueError("Не твой ход!")
         if not self.has_drawn_this_turn: raise ValueError("Надо взять карту!")
         self.next_turn()
-        
+        self.last_played_player_id = current_player.id
+
     def toggle_spectator(self, player_id: str):
         p = next((x for x in self.players if x.id == player_id), None)
         if p: p.wants_to_spectate = not p.wants_to_spectate

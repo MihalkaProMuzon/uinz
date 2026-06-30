@@ -87,6 +87,8 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
                 elif action == "take_penalty": room.take_penalty(player_id)
                 elif action == "draw_card": room.draw_card(player_id)
                 elif action == "pass_turn": room.pass_turn(player_id)
+                elif action == "say_uno": room.say_uno(player_id)
+                elif action == "catch_uno": room.catch_uno(player_id)
                 elif action == "start_game": room.start_game(player_id)
                 elif action == "reset_lobby": room.reset_to_lobby(player_id)
                 elif action == "toggle_spectator": room.toggle_spectator(player_id)
@@ -97,7 +99,15 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str, player_name: st
                 # НОВОЕ: Шлем ошибку лично нарушителю, чтобы он знал, что не так!
                 await websocket.send_text(json.dumps({"action": "error", "message": str(e)}))
                 continue 
-                
+            
+            print('Последним ходил:', end='')
+            if room.last_played_player_id:
+                plbid = room.get_player_by_id(room.last_played_player_id)
+                if plbid:
+                    print(plbid.name)
+            else:
+                print('---')
+
             await manager.broadcast(room_id)
             
     except WebSocketDisconnect:
