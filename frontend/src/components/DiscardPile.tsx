@@ -76,14 +76,14 @@ export function DiscardPile({ cards, declaredColor, actionLog, meId, players }: 
         const animationDelay = (isNewCard && delayIndex > 0) ? delayIndex * 0.15 : 0;
 
         const base = getSeededRandom(card.id);
-        const randRot = (base * 3.149796) % 1;
+        const randRot = (base * 5.14809796) % 1;
         const randOffsetX = (base * 7.9734652375) % 1;
         const randOffsetY = (base * 13.098234659823) % 1;
 
         const rot = (randRot - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_ROT;
         const offsetX = (randOffsetX - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_OFFSET_X;
         const offsetY = (randOffsetY - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_OFFSET_Y;
-        const expandedX = (index - visibleCards.length + 1) * 60;
+        const expandedX = (index - visibleCards.length + 1) * GAME_CONFIG.DISCARD_PILE_CARD_EXAND;
 
         return (
           <motion.div
