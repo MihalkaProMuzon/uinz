@@ -35,7 +35,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
         // dragSnapToOrigin={true} 
         
         // Когда мы тащим карту, она чуть увеличивается и поднимается выше всех
-        whileDrag={{ scale: 1.05, zIndex: 999 }}
+        whileDrag={{ zIndex: 999 }}
         {...props}
       >
         <div className="absolute inset-2 rounded-lg flex flex-col items-center justify-center" style={{ backgroundColor: bgColor, color: textColor }}>

@@ -12,9 +12,14 @@ export const GAME_CONFIG = {
   BANK_OFFSET_X: 220,    // Сдвиг банка вправо в пикселях
 
   // Найстройки Сброса
-  DISCARD_PILE_CARD_RND_OFFSET_X: 30, 
-  DISCARD_PILE_CARD_RND_OFFSET_Y: 30, 
+  // DISCARD_PILE_CARD_RND_OFFSET_X: 30, 
+  // DISCARD_PILE_CARD_RND_OFFSET_Y: 30, 
+  // DISCARD_PILE_CARD_RND_ROT: 40,
+
+  DISCARD_PILE_CARD_RND_OFFSET_X: 20, 
+  DISCARD_PILE_CARD_RND_OFFSET_Y: 20, 
   DISCARD_PILE_CARD_RND_ROT: 40,
+
   MAX_VISIBLE_DISCARD: 7,
 
   // Зона подготовки (Декорации и кнопки)

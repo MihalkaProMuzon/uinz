@@ -58,10 +58,15 @@ export function DiscardPile({ cards, declaredColor, actionLog, meId, players }: 
     >
       {visibleCards.map((card, index) => {
         const isNewestCard = index === visibleCards.length - 1;
-        const rand = getSeededRandom(card.id);
-        const rot = (rand - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_ROT;
-        const offsetX = (rand - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_OFFSET_X;
-        const offsetY = (rand - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_OFFSET_Y;
+
+        const base = getSeededRandom(card.id);
+        const randRot = (base * 3.149796) % 1;
+        const randOffsetX = (base * 7.9734652375) % 1;
+        const randOffsetY = (base * 13.098234659823) % 1;
+
+        const rot = (randRot - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_ROT;
+        const offsetX = (randOffsetX - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_OFFSET_X;
+        const offsetY = (randOffsetY - 0.5) * GAME_CONFIG.DISCARD_PILE_CARD_RND_OFFSET_Y;
         const expandedX = (index - visibleCards.length + 1) * 60;
 
         const shouldAnimateSpawn = isNewestCard && isNewPlay;
@@ -76,7 +81,7 @@ export function DiscardPile({ cards, declaredColor, actionLog, meId, players }: 
               scale: 0.3, // Вылетает мелкой из аватара
               x: wasPlayedByMe ? 0 : startX,
               y: wasPlayedByMe ? 400 : startY, 
-              rotate: wasPlayedByMe ? 0 : 180 
+              rotate: wasPlayedByMe ? 0 : randRot 
             } : false}
             animate={{
               x: isExpanded ? expandedX : offsetX,

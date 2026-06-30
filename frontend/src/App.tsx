@@ -366,15 +366,15 @@ export default function App() {
             const isDragging = activeCardId === card.id;
             const isNew = !seenCards.current.has(card.id);
 
-            // 🏆 УМНЫЙ ANIMATE: Разделяем логику полета, перетаскивания и покоя
+            // Разделяем логику полета, перетаскивания и покоя
             let animateProps;
 
             if (isDragging) {
               // 1. КОГДА ТАЩИМ: Убираем x и y! 
               // Теперь мышка управляет картой свободно, без задержек и сопротивления.
               animateProps = {
-                scale: 1,
-                rotate: 0, // Карта выравнивается (становится прямо), пока мы её несем
+                scale: 1.05,
+                rotate: 0, // Карта выравнивается, пока мы её несем
                 opacity: 1,
                 zIndex: 100
               };
