@@ -33,7 +33,7 @@ export default function App() {
     }
   }, [gameState?.status]);
   
-  // --- СИНХРОНИЗАЦИЯ СОСТОЯНИЯ И ПАМЯТЬ АНИМАЦИЙ ---
+  // --- СИНХРОНИЗАЦИЯ СОСТОЯНИЯ И ПАМЯТЬ АНИМАЦИЙ ---  
   useEffect(() => {
       const myPlayer = gameState?.players.find((p: any) => p.id === me?.id);
       if (!myPlayer) return;
@@ -69,16 +69,12 @@ export default function App() {
 
 
   // --- ЛОГИКА DRAG & DROP И СОРТИРОВКИ ---
-  const seenCards = useRef<Set<string>>(new Set());
-  // Этот эффект будет запоминать все карты, которые мы отрендерили
-  
-  
-  // --- ОЧИСТКА ПАМЯТИ И ТРЕКИНГ НОВЫХ КАРТ ---
-  useEffect(() => {
-    // 1. Добавляем все текущие карты в "уже увиденные"
-    localCards.forEach(card => seenCards.current.add(card.id));
 
-    // 2. УБОРКА: Забываем карты, которых больше нет у нас локально
+  const seenCards = useRef<Set<string>>(new Set());
+  const [renderTick, setRenderTick] = useState(0);
+  
+  // --- ОЧИСТКА ПАМЯТИ
+  useEffect(() => {
     const currentIds = new Set(localCards.map(c => c.id));
     for (const id of seenCards.current) {
       if (!currentIds.has(id)) {
@@ -363,23 +359,23 @@ export default function App() {
             const layout = isHand ? handLayout.find(l => l.id === card.id)! : stagingLayout.find(l => l.id === card.id)!;
             const targetY = isHand ? GAME_CONFIG.HAND_Y_POS - layout.y : GAME_CONFIG.STAGE_ZONE_Y;
             
+
+            // Разделяем логику полета, перетаскивания и покоя
             const isDragging = activeCardId === card.id;
             const isNew = !seenCards.current.has(card.id);
 
-            // Разделяем логику полета, перетаскивания и покоя
             let animateProps;
 
             if (isDragging) {
-              // 1. КОГДА ТАЩИМ: Убираем x и y! 
-              // Теперь мышка управляет картой свободно, без задержек и сопротивления.
+              // ТАЩИМ: убираем координаты, чтобы мышка управляла картой
               animateProps = {
                 scale: 1.05,
-                rotate: 0, // Карта выравнивается, пока мы её несем
+                rotate: 0,
                 opacity: 1,
                 zIndex: 100
               };
             } else if (isNew) {
-              // 2. КОГДА ТОЛЬКО ВЗЯЛИ ИЗ БАНКА: Летит по Keyframes [оттуда, сюда]
+              // НОВАЯ: летит из банка (Keyframes)
               animateProps = {
                 x: [bankStartX, layout.x],
                 y: [bankStartY, targetY],
@@ -389,8 +385,7 @@ export default function App() {
                 zIndex: layout.zIndex + (isHand ? 0 : 50)
               };
             } else {
-              // 3. ОБЫЧНОЕ СОСТОЯНИЕ (Покой или Возврат после того как отпустили)
-              // Фреймер сам интерполирует плавный полет из точки, где ты бросил карту, сюда.
+              // ОБЫЧНАЯ: статичные координаты слота
               animateProps = {
                 x: layout.x,
                 y: targetY,
@@ -405,14 +400,32 @@ export default function App() {
               <Card
                 key={card.id}
                 card={card}
-                className="pointer-events-auto"
                 
-                onDragStart={() => setActiveCardId(card.id)}
+                // 1. МАГИЯ CSS: Если карта летит (isNew), она буквально "прозрачна" для мыши
+                className={isNew ? "pointer-events-none" : "pointer-events-auto"}
+                
+                onDragStart={() => {
+                  setActiveCardId(card.id);
+                  if (isNew) {
+                    seenCards.current.add(card.id);
+                    setRenderTick(t => t + 1);
+                  }
+                }}
                 onDrag={(e, info) => handleDrag(e, info, card.id)}
                 onDragEnd={(e, info) => handleDragEnd(e, info, card.id)}
                 
+                onAnimationComplete={() => {
+                  if (isNew) {
+                    seenCards.current.add(card.id);
+                    setRenderTick(t => t + 1);
+                  }
+                }}
+
                 animate={animateProps}
-                whileHover={isHand && !isDragging ? { y: targetY - GAME_CONFIG.CARD_HOVER_OFFSET, rotate: layout.rotate } : {}}
+                
+                // 2. Добавляем !isNew в условие hover-анимации для 100% надежности
+                whileHover={isHand && !isDragging && !isNew ? { y: targetY - GAME_CONFIG.CARD_HOVER_OFFSET, rotate: layout.rotate } : {}}
+                
                 transition={GAME_CONFIG.TRANSITIONS.UI}
               />
             );
